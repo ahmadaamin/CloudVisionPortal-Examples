@@ -3,9 +3,9 @@
   body:
     value:
       key:
-        studio_id: studio-l3ls
-        workspace_id: &workspace_id ws-l3ls
-      display_name: L3 Leaf-Spine Fabric
+        studio_id: cf2b8377-5c5c-4387-93d0-1ab4ff1647e7
+        workspace_id: 90108537-e878-4337-a8c9-bc56274f932a
+      display_name: L3 Leaf-Spine Fabric - Modified (Clone)
       description: Deploy and manage an Arista validated L3 leaf-spine fabric, including support for a multi-tenant BGP EVPN overlay.
       template:
         type: TEMPLATE_TYPE_MAKO
@@ -100,27 +100,6 @@
                   },
                   "tcam_profile": None,
                   "info": "Configured in standard settings"
-              },
-              #Ahmad adding T3 Fixed and Chassis
-              "trident3-fixed": {
-                  "regexes": [r'DCS-7050[STC]X3',r'CCS-72[02]XP'],
-                  "reload_delay": {
-                      "mlag": 300,
-                      "non_mlag": 330
-                  },
-                  "tcam_profile": None,
-                  "info": "Configured in standard settings",
-                  "trident_forwarding_table_partition": "flexible exact-match 16384 l2-shared 98304 l3-shared 131072"
-              },
-              "trident3-chassis": {
-                  "regexes": [r'DCS-73\d\dX3'],
-                  "reload_delay": {
-                      "mlag": 1200,
-                      "non_mlag": 1320
-                  },
-                  "tcam_profile": None,
-                  "info": "Configured in standard settings",
-                  "trident_forwarding_table_partition": "flexible exact-match 16384 l2-shared 98304 l3-shared 131072"
               },
               "default": {
                   "regexes": [r'.+'],
@@ -812,11 +791,10 @@
                       link['ip_address'] = str(get_p2p_uplinks_ip(switch_facts, uplink_switch_facts, i))
                       link['peer_ip_address'] = str(get_p2p_uplinks_peer_ip(switch_facts, uplink_switch_facts, i))
                       link['subnet_mask'] = switch_facts['uplink_ipv4_subnet_mask']
-                      #Ahmad PIM enabled on uplink interfaces
                       if switch_facts.get('underlay_multicast'):
-                          link['underlay_multicast'] = True
+                          link['pim_enabled'] = True
                       else:
-                          link['underlay_multicast'] = False
+                          link['pim_enabled'] = False
                       topology_facts['links'][uplink_interface] = link
 
               elif switch_facts['uplink_type'] == "port-channel":
@@ -1156,14 +1134,6 @@
                       switch_facts['vtep'] = False
                       # Clear evpn role
                       switch_facts['evpn_role'] = None
-                  if pod is not None:
-                      #Ahmad get Underlay Multicast
-                      switch_facts["underlay_multicast"] = pod['underlayRouting']['underlayMulticast']
-                      #Ahmad get Overlay Multicast
-                      switch_facts["evpn_multicast"] = pod['commonBGPConfig']['evpnMulticast']
-                      #Ahmad get RT Membership
-                      switch_facts["evpn_rt_membership"] = pod['commonBGPConfig']['evpnRtMembership']
-
 
               if re.match(veos_regex, switch_facts['platform']):
                   switch_facts['p2p_uplinks_mtu'] = 1500
@@ -1208,7 +1178,6 @@
                       "system": switch_facts['platform_settings']['tcam_profile']
                   }
               # Set routing
-              #Ahmad adding EVPN Multicast Logic
               config['service_routing_protocols_model'] = "multi-agent"
               if switch_facts['underlay_router'] is True:
                   config['ip_routing'] = True
@@ -1218,9 +1187,6 @@
                               "routing": True
                           }
                       }
-                      if switch_facts.get('evpn_multicast'):
-                          config['router_multicast']["ipv4"]["software_forwarding"] = "sfe"
-
               # Set router-bgp
               if switch_facts['underlay_router'] is True \
                       and (switch_facts['underlay_routing_protocol'] == "bgp"
@@ -1236,15 +1202,6 @@
               # Set platform_settings eos_cli
               if switch_facts['platform_settings'].get('eos_cli'):
                   config['eos_cli'] = switch_facts['platform_settings']['eos_cli']
-
-              #Ahmad Trident Forwarding table Partition if configured
-              if switch_facts['platform_settings'].get('trident_forwarding_table_partition') is not None and switch_facts['evpn_multicast']:
-                  config["platform"] = {
-                          "trident": {
-                              "forwarding_table_partition": switch_facts['platform_settings']['trident_forwarding_table_partition']
-                          }
-                      }
-                  
 
               return config
 
@@ -1292,10 +1249,6 @@
                       config['vlan_interfaces'][f"Vlan{switch_facts['mlag_peer_l3_vlan']}"]['ospf_network_point_to_point'] = True
                       config['vlan_interfaces'][f"Vlan{switch_facts['mlag_peer_l3_vlan']}"]['ospf_area'] \
                           = switch_facts['underlay_ospf_area']
-                      
-                  #Ahmad SVI mlag multicast config, enable sparse mode and configure local-interface to be ping test loopback if evpn_multiast is set
-                  if switch_facts['mlag_l3'] is True and switch_facts['underlay_multicast']:
-                      config['vlan_interfaces'][f"Vlan{switch_facts['mlag_peer_l3_vlan']}"]["pim"] = {"ipv4": {"sparse_mode": True}}
 
                   # Set port-channel interfaces
                   mlag_peer = switch_facts['mlag_peer']  # Friendlier variable name for creating custom interface description
@@ -1411,11 +1364,9 @@
                           link_facts['channel_group_id'] = neighbor_link_info.get('peer_channel_group_id')
                           link_facts['peer_channel_group_id'] = neighbor_link_info.get('channel_group_id')
                           link_facts['channel_description'] = neighbor_link_info.get('peer_channel_description')
+                          link_facts['pim_enabled'] = neighbor_link_info.get('pim_enabled')
                           interface = neighbor_link_info['peer_interface']
                           underlay_data['links'][interface] = link_facts
-                          #Ahmad multicast/pim
-                          link_facts["underlay_multicast"] = neighbor_link_info.get("underlay_multicast")
-                          
 
               # Set Ethernet interfaces
               for iface in underlay_data['links']:
@@ -1434,8 +1385,7 @@
                       if switch_facts['underlay_routing_protocol'] == "ospf":
                           config['ethernet_interfaces'][iface]['ospf_network_point_to_point'] = True
                           config['ethernet_interfaces'][iface]['ospf_area'] = switch_facts['underlay_ospf_area']
-                      #Ahmad PIM Config on Interface
-                      if link.get('underlay_multicast'):
+                      if link.get('pim_enabled'):
                           config['ethernet_interfaces'][iface]['pim'] = {
                               "ipv4": {"sparse_mode": True}
                           }
@@ -1691,25 +1641,6 @@
                           "threshold": fabric_variables['evpn_hostflap_detection']['threshold'],
                           "enabled": fabric_variables['evpn_hostflap_detection']['enabled']
                       }
-                  
-                  #Ahmad rt-membership configurtion
-                  if switch_facts.get('evpn_rt_membership'):
-                      if switch_facts['evpn_role'] == "server":
-                          config['router_bgp']['address_family_rt']['peer_groups'] = {
-                              fabric_variables['bgp_peer_groups']['EVPN_OVERLAY_PEERS']['name']: {
-                                  "activate": True,
-                                  "default_route_target": {
-                                    "only": True
-                                  }
-                              }
-                          }
-                      elif switch_facts['evpn_role']=="client":
-                          config['router_bgp']['address_family_rt']['peer_groups'] = {
-                              fabric_variables['bgp_peer_groups']['EVPN_OVERLAY_PEERS']['name']: {
-                                  "activate": True
-                                  }
-                          }
-                  
                   # Overlay network peering
                   for rs, info in overlay_data['evpn_route_servers'].items():
                       config['router_bgp']['neighbors'][info['ip_address']] = {
@@ -1717,14 +1648,12 @@
                           "description": rs,
                           "remote_as": info['bgp_as']
                       }
-                      
                   for cs, info in overlay_data['evpn_route_clients'].items():
                       config['router_bgp']['neighbors'][info['ip_address']] = {
                           "peer_group": fabric_variables['bgp_peer_groups']['EVPN_OVERLAY_PEERS']['name'],
                           "description": cs,
                           "remote_as": info['bgp_as']
                       }
-
                   # Create peer filter and listen range statements if necessary
                   if switch_facts.get('dynamic_bgp_evpn_peering'):
                       # Divide remote_asns into as few continuous asn ranges as possible
@@ -1766,49 +1695,20 @@
                           ['bgp_listen_range_prefixes'][loopback_pool]) = {
                               "peer_filter": "DOWNLINK-EVPN-NEIGHBORS"
                           }
-                      #Ahmad Activate RT membership if enabled 
-                      #if switch_facts.get('evpn_rt_membership'):
-                      #    if switch_facts['evpn_role'] == "server":
-                      #        config['router_bgp']['address_family_rt']['peer_groups'] = {
-                      #        "name": fabric_variables['bgp_peer_groups']['EVPN_OVERLAY_PEERS']['name'],
-                      #        "activate": True,
-                      #        "default_route_target": {
-                      #        "only": True
-                      #            }
-                      #        }
-                      #    else:
-                      #        (config['router_bgp']['address_family_rt']['peer_groups']
-                      #        [fabric_variables['bgp_peer_groups']['EVPN_OVERLAY_PEERS']['name']]) = {
-                      #        "activate": True
-                      #        }
-          
               return config
 
 
-          #Ahmad changes to vxlan definition to accomodate evpn_multicast
           def set_vxlan_config(config, switch_facts):
               if switch_facts.get('vtep') is True:
-                  if switch_facts.get('mlag') and switch_facts.get('evpn_multicast'):
-                      config['vxlan_interface'] = {
-                          "Vxlan1": {
-                              "description": f"{switch_facts['hostname']}_VTEP",
-                              "vxlan": {
-                                  "source_interface": "Loopback0",
-                                  "udp_port": 4789,
-                                  "mlag_source_interface":  switch_facts['vtep_loopback']
-                              }
+                  config['vxlan_interface'] = {
+                      "Vxlan1": {
+                          "description": f"{switch_facts['hostname']}_VTEP",
+                          "vxlan": {
+                              "source_interface": switch_facts['vtep_loopback'],
+                              "udp_port": 4789
                           }
                       }
-                  else:
-                      config['vxlan_interface'] = {
-                          "Vxlan1": {
-                              "description": f"{switch_facts['hostname']}_VTEP",
-                              "vxlan": {
-                                  "source_interface": switch_facts['vtep_loopback'],
-                                  "udp_port": 4789
-                              }
-                          }
-                      }
+                  }
                   if switch_facts.get('mlag'):
                       config['vxlan_interface']['Vxlan1']['vxlan']['virtual_router_encapsulation_mac_address'] = "mlag-system-id"
               return config
@@ -1910,7 +1810,7 @@
               # Check to see that a device isn't assigned multiple roles within the L3 Leaf-Spine fabric
               roles_intersect = [role for role in roles_applied_to_switch if role in list(potential_roles.keys())]
               assert len(roles_intersect) <= 1, f"Only 1 data center role should be applied to the switch. " \
-                                              f"Detected the following roles applied to {switch_facts['hostname']}: {roles_intersect}"
+                                                f"Detected the following roles applied to {switch_facts['hostname']}: {roles_intersect}"
               # Set role
               if roles_applied_to_switch is not None:
                   for role in potential_roles.keys():
@@ -1945,8 +1845,8 @@
                       # Set leaf domain
                       l3_leaf_domain_id = l3_leaf_domain_dict.get(device_id)
                       assert l3_leaf_domain is not None, f"There is no input resolver present for Leaf-Domain {l3_leaf_domain_id} in PoD {switch_facts['pod']}. " \
-                                                          f"Either enter an input for Leaf-Domain {l3_leaf_domain_id} in PoD {switch_facts['pod']} or " \
-                                                          f"remove the 'Leaf-Domain:{l3_leaf_domain_id}' tag from all devices in this pod."
+                                                         f"Either enter an input for Leaf-Domain {l3_leaf_domain_id} in PoD {switch_facts['pod']} or " \
+                                                         f"remove the 'Leaf-Domain:{l3_leaf_domain_id}' tag from all devices in this pod."
                       if l3_leaf_domain_id is None:
                           return
                       switch_facts['l3_leaf_domain'] = l3_leaf_domain_id
@@ -1959,8 +1859,8 @@
                       # Set leaf domain
                       l2_leaf_domain_id = l2_leaf_domain_dict.get(device_id)
                       assert l2_leaf_domain is not None, f"There is no input resolver present for L2-Leaf-Domain {l2_leaf_domain_id} in PoD {switch_facts['pod']}. " \
-                                                          f"Either enter an input for L2-Leaf-Domain {l2_leaf_domain_id} in PoD {switch_facts['pod']} or " \
-                                                          f"remove the 'L2-Leaf-Domain:{l2_leaf_domain_id}' tag from all devices in this pod."
+                                                         f"Either enter an input for L2-Leaf-Domain {l2_leaf_domain_id} in PoD {switch_facts['pod']} or " \
+                                                         f"remove the 'L2-Leaf-Domain:{l2_leaf_domain_id}' tag from all devices in this pod."
                       if l2_leaf_domain_id is None:
                           return
                       switch_facts['l2_leaf_domain'] = l2_leaf_domain_id
@@ -2340,8 +2240,6 @@
               "route_maps": {},
               # Will look into setting bfd config in later version of studio; for now users should set with static configlet
               # "router_bfd": {},
-              #Ahmad added this
-              "router_multicast": {},
               "peer_filters": {},
               "router_bgp": {
                   "peer_groups": {},
@@ -2349,10 +2247,6 @@
                       "peer_groups": {}
                   },
                   "address_family_evpn": {
-                      "peer_groups": {}
-                  },
-                  #Ahmad added this
-                  "address_family_rt": {
                       "peer_groups": {}
                   },
                   "neighbor_interfaces": {},
@@ -2497,12 +2391,6 @@
           %                 endfor
           %             endif
           %         endif
-          ## Ahmad Adding PIM Config to Ethernet Interfaces
-          %         if config["ethernet_interfaces"][ethernet_interface].get("pim"):
-          %           if config["ethernet_interfaces"][ethernet_interface]["pim"]["ipv4"].get("sparse_mode"):
-          pim ipv4 sparse-mode
-          %           endif
-          %         endif
           %         if config["ethernet_interfaces"][ethernet_interface].get("ospf_network_point_to_point"):
           ip ospf network point-to-point
           %         endif
@@ -2598,12 +2486,6 @@
           %      if config.get("vlan_interfaces")[vlan_interface].get("ospf_area"):
           ip ospf area ${ config.get("vlan_interfaces")[vlan_interface]["ospf_area"] }
           %      endif
-          ## Ahmad adding PIM on SVIs
-          %      if config.get("vlan_interfaces")[vlan_interface].get("pim"):
-          %         if config.get("vlan_interfaces")[vlan_interface]["pim"]["ipv4"].get("sparse_mode"):
-          pim ipv4 sparse-mode
-          %         endif
-          %      endif
           !
           %   endfor
           % endif
@@ -2613,10 +2495,6 @@
           %     if config["vxlan_interface"]["Vxlan1"].get("vxlan"):
           %         if config["vxlan_interface"]["Vxlan1"]["vxlan"].get("source_interface"):
           vxlan source-interface ${ config["vxlan_interface"]["Vxlan1"]["vxlan"]["source_interface"] }
-          %         endif
-          ## Ahmad Adding evpn_multicast config section to vxlan interface
-          %         if config["vxlan_interface"]["Vxlan1"]["vxlan"].get("mlag_source_interface"):
-          vxlan mlag source-interface ${ config["vxlan_interface"]["Vxlan1"]["vxlan"]["mlag_source_interface"] }
           %         endif
           %         if config["vxlan_interface"]["Vxlan1"]["vxlan"].get("virtual_router_encapsulation_mac_address"):
           vxlan virtual-router encapsulation mac-address ${ config["vxlan_interface"]["Vxlan1"]["vxlan"]["virtual_router_encapsulation_mac_address"] }
@@ -2674,35 +2552,6 @@
           no ip routing vrf ${ vrf }
           %       endif
           %   endfor
-          !
-          % endif
-          ## Ahmad eos - Router Multicast (From Campus Studio)
-          % if config.get("router_multicast"):
-          router multicast
-          %     if config["router_multicast"].get("ipv4"):
-              ipv4
-          %         if config["router_multicast"]["ipv4"].get("routing"):
-              routing
-          %         endif
-          %         if config["router_multicast"]["ipv4"].get("multipath"):
-              multipath ${ config["router_multicast"]["ipv4"]["multipath"] }
-          %         endif
-          %         if config["router_multicast"]["ipv4"].get("software_forwarding"):
-              software-forwarding ${ config["router_multicast"]["ipv4"]["software_forwarding"] }
-          %         endif
-          %     endif
-          ##%     for vrf in natural_sort(config["router_multicast"].get("vrfs",[]), sort_key="name"):
-          ##%         if vrf["name"] != "default":
-          ##    vrf ${ vrf["name"] }
-          ##%             if vrf.get("ipv4"):
-          ##    ipv4
-          ##%             endif
-          ##%             if vrf["ipv4"].get("routing", False) is True:
-          ##        routing
-          ##%             endif
-          ##    !
-          ##%         endif
-          ##%     endfor
           !
           % endif
           ## eos - prefix-lists
@@ -3057,29 +2906,29 @@
           %             endif
           %           endfor
           %         endif
-          %        endif
-          ##Ahmad address family rt-membership activation 
-          %     if config["router_bgp"]["address_family_rt"].get("peer_groups") is not None:
-          !
-          address-family rt-membership
-          %         for peer_group in natural_sort(config["router_bgp"]["address_family_rt"]["peer_groups"].keys()):
-          %             if config["router_bgp"]["address_family_rt"]["peer_groups"][peer_group].get("activate"):
-              neighbor ${ peer_group } activate
-          %             elif not config["router_bgp"]["address_family_rt"]["peer_groups"][peer_group].get("activate"):
-              no neighbor ${ peer_group } activate
-          %             endif 
-          %             if config["router_bgp"]["address_family_rt"]["peer_groups"][peer_group].get("default_route_target") is not None:
-          %                 if config["router_bgp"]["address_family_rt"]["peer_groups"][peer_group]["default_route_target"].get("only"):
-              neighbor ${ peer_group } default-route-target only
-          %                 else:
-              neighbor ${ peer_group } default-route-target
-          %                 endif 
-          %             endif 
-          %             if config["router_bgp"]["address_family_rt"]["peer_groups"][peer_group].get("encoding_origin_as_omit") is not None:
-              neighbor ${ peer_group } default-route-target encoding origin-as omit
-          %             endif 
-          %         endfor 
-          %     endif 
+          %     endif
+          ## {# address family rt-membership activation #}
+          ## {%     if router_bgp.address_family_rtc is arista.avd.defined %}
+          ##    !
+          ##    address-family rt-membership
+          ## {%         for peer_group in router_bgp.address_family_rtc.peer_groups | arista.avd.natural_sort %}
+          ## {%             if router_bgp.address_family_rtc.peer_groups[peer_group].activate is arista.avd.defined(true) %}
+          ##       neighbor ${ peer_group } activate
+          ## {%             elif router_bgp.address_family_rtc.peer_groups[peer_group].activate is arista.avd.defined(false) %}
+          ##       no neighbor ${ peer_group } activate
+          ## {%             endif %}
+          ## {%             if router_bgp.address_family_rtc.peer_groups[peer_group].default_route_target is defined %}
+          ## {%                 if router_bgp.address_family_rtc.peer_groups[peer_group].default_route_target.only is arista.avd.defined(true) %}
+          ##       neighbor ${ peer_group } default-route-target only
+          ## {%                 else %}
+          ##       neighbor ${ peer_group } default-route-target
+          ## {%                 endif %}
+          ## {%             endif %}
+          ## {%             if router_bgp.address_family_rtc.peer_groups[peer_group].default_route_target.encoding_origin_as_omit is defined %}
+          ##       neighbor ${ peer_group } default-route-target encoding origin-as omit
+          ## {%             endif %}
+          ## {%         endfor %}
+          ## {%     endif %}
           ## address family ipv4 activation
           %     if config["router_bgp"].get("address_family_ipv4") is not None:
           !
@@ -3447,40 +3296,12 @@
           !
           %endfor
           %endif
-          ##Ahmad eos - platform 
-          % if config.get("platform_settings") is not None:
-          !
-          %     if config["platform"]["trident"]["forwarding_table_partition"] is not None:
-          platform trident forwarding-table partition ${config["platform"]["trident"]["forwarding_table_partition"]}
-          %     endif
-          ##{%     if platform.sand is arista.avd.defined %}
-          ##{%         for qos_map in platform.sand.qos_maps | arista.avd.natural_sort('traffic_class') %}
-          ##{%             if qos_map.traffic_class is arista.avd.defined and qos_map.to_network_qos is arista.avd.defined %}
-          ##platform sand qos map traffic-class {{ qos_map.traffic_class }} to network-qos {{ qos_map.to_network_qos }}
-          ##{%             endif %}
-          ##{%         endfor %}
-          ##{%         if platform.sand.lag.hardware_only is arista.avd.defined(true) %}
-          ##platform sand lag hardware-only
-          ##{%         endif %}
-          ##{%         if platform.sand.lag.mode is arista.avd.defined %}
-          ##platform sand lag mode {{ platform.sand.lag.mode }}
-          ##{%         endif %}
-          ##{%         if platform.sand.forwarding_mode is arista.avd.defined %}
-          ##platform sand forwarding mode {{ platform.sand.forwarding_mode }}
-          ##{%         endif %}
-          ##{%         if platform.sand.multicast_replication.default is arista.avd.defined %}
-          ##platform sand multicast replication default {{ platform.sand.multicast_replication.default }}
-          ##{%         endif %}
-          ##{%     endif %}
-          % endif
           ## EOS CLI
           % if config.get("eos_cli"):
           %   for line in config["eos_cli"]:
           ${line}
           %   endfor
           % endif
-
-          
       input_schema:
         fields:
           values:
@@ -3493,11 +3314,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 169.254.0.0/24
+                is_secret: false
                 static_options: null
                 format: cidr
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             internalVlan:
               id: internalVlan
               name: mlagVlan
@@ -3510,6 +3333,7 @@
                 range: 1..4094
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagPortChannelId:
               id: mlagPortChannelId
               name: mlagPortChannelId
@@ -3522,6 +3346,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             virtualRouterMac:
               id: virtualRouterMac
               name: virtualRouterMacAddress
@@ -3531,11 +3356,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 00:1c:73:00:00:99
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagSubnetMask:
               id: mlagSubnetMask
               name: mlagSubnetMask
@@ -3551,6 +3378,7 @@
                     - '31'
                     - '30'
                 dynamic_options: null
+                extra_values_allowed: false
             lacpMode:
               id: lacpMode
               name: lacpMode
@@ -3560,6 +3388,7 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: active
+                is_secret: false
                 static_options:
                   values:
                     - active
@@ -3569,6 +3398,7 @@
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagPeerL3Vlan:
               id: mlagPeerL3Vlan
               name: mlagPeerL3Vlan
@@ -3581,6 +3411,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagPeerL3Subnet:
               id: mlagPeerL3Subnet
               name: mlagPeerL3Subnet
@@ -3590,11 +3421,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagPeerL3SubnetMask:
               id: mlagPeerL3SubnetMask
               name: mlagPeerL3SubnetMask
@@ -3610,6 +3443,16 @@
                     - '30'
                     - '31'
                 dynamic_options: null
+                extra_values_allowed: false
+            d65f3c69-5601-41fc-a659-4dc569710544:
+              id: d65f3c69-5601-41fc-a659-4dc569710544
+              name: mlagRfc5549
+              label: MLAG IPv6 Unnumbered
+              description: Enable RFC 5549(iBGP) i.e. IPv6 Unnumbered for MLAG iBGP connections. Requires IPv6 Unumbered in Underlay
+              required: false
+              type: INPUT_FIELD_TYPE_BOOLEAN
+              boolean_props:
+                default_value: false
             commonMlagConfig:
               id: commonMlagConfig
               name: commonMlagConfig
@@ -3629,6 +3472,7 @@
                     - mlagPeerL3Vlan
                     - mlagPeerL3Subnet
                     - mlagPeerL3SubnetMask
+                    - d65f3c69-5601-41fc-a659-4dc569710544
             spineAS:
               id: spineAS
               name: spineAsn
@@ -3638,11 +3482,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: '65000'
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             leafASbase:
               id: leafASbase
               name: leafAsnRange
@@ -3652,11 +3498,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 65001-65535
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             spineLoopback0Subnet:
               id: spineLoopback0Subnet
               name: spineLoopback0Subnet
@@ -3666,11 +3514,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 172.16.0.0/24
+                is_secret: false
                 static_options: null
                 format: cidr
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             leafLoopback0Subnet:
               id: leafLoopback0Subnet
               name: leafLoopback0Subnet
@@ -3680,11 +3530,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 172.16.0.0/24
+                is_secret: false
                 static_options: null
                 format: cidr
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             spineBGPDynamicNeighbors:
               id: spineBGPDynamicNeighbors
               name: spineBGPDynamicNeighbors
@@ -3712,11 +3564,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             spineBgpDefaults:
               id: spineBgpDefaults
               name: spineBgpDefaults
@@ -3736,11 +3590,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             leafBgpDefaults:
               id: leafBgpDefaults
               name: leafBgpDefaults
@@ -3751,6 +3607,24 @@
               collection_props:
                 base_field_id: leafBgpEosCliStatement
                 key: ''
+            8ca19626-919c-4403-99dc-e2bc21d2bb58:
+              id: 8ca19626-919c-4403-99dc-e2bc21d2bb58
+              name: evpnRtMembership
+              label: EVPN RT Membership Enabled
+              description: Enable Route Target Membership Constraint Address Family on EVPN overlay BGP peerings (Min. EOS 4.25.1F).Requires use eBGP as overlay protocol.
+              required: false
+              type: INPUT_FIELD_TYPE_BOOLEAN
+              boolean_props:
+                default_value: false
+            466fa395-f633-4ef5-a7b4-bdefa5864bfa:
+              id: 466fa395-f633-4ef5-a7b4-bdefa5864bfa
+              name: evpnMulticast
+              label: EVPN Multicast Enabled
+              description: 'Enable Fabric to support EVPN Multicast. Requires "underlay_multicast: true" and IGMP snooping enabled globally (default).'
+              required: false
+              type: INPUT_FIELD_TYPE_BOOLEAN
+              boolean_props:
+                default_value: false
             commonBGPConfig:
               id: commonBGPConfig
               name: commonBGPConfig
@@ -3769,6 +3643,8 @@
                     - evpnEnabled
                     - spineBgpDefaults
                     - leafBgpDefaults
+                    - 8ca19626-919c-4403-99dc-e2bc21d2bb58
+                    - 466fa395-f633-4ef5-a7b4-bdefa5864bfa
             asNumber:
               id: asNumber
               name: asn
@@ -3781,6 +3657,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             l3LeafMlag:
               id: l3LeafMlag
               name: l3LeafMlag
@@ -3824,6 +3701,7 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: MSTP
+                is_secret: false
                 static_options:
                   values:
                     - MSTP
@@ -3834,6 +3712,7 @@
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             fabricSubnetMask:
               id: fabricSubnetMask
               name: underlayFabricSubnetMask
@@ -3843,6 +3722,7 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: '31'
+                is_secret: false
                 static_options:
                   values:
                     - '30'
@@ -3851,6 +3731,7 @@
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             underlayRoutingProtocol:
               id: underlayRoutingProtocol
               name: underlayRoutingProtocol
@@ -3860,6 +3741,7 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: BGP
+                is_secret: false
                 static_options:
                   values:
                     - BGP
@@ -3868,6 +3750,7 @@
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             fabricLinksSubnet:
               id: fabricLinksSubnet
               name: underlayFabricSubnet
@@ -3877,11 +3760,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 172.16.200.0/24
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             spineSuperSpineFabricSubnet:
               id: spineSuperSpineFabricSubnet
               name: spineSuperSpineFabricSubnet
@@ -3891,11 +3776,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             spineSuperSpineFabricSubnetMask:
               id: spineSuperSpineFabricSubnetMask
               name: spineSuperSpineFabricSubnetMask
@@ -3911,6 +3798,25 @@
                     - '30'
                     - '31'
                 dynamic_options: null
+                extra_values_allowed: false
+            44c9edf8-6f88-454d-a305-46a891432c55:
+              id: 44c9edf8-6f88-454d-a305-46a891432c55
+              name: underlayMulticast
+              label: Underlay Multicast
+              description: 'Enable Multicast in the underlay on all p2p uplink interfaces and mlag l3 peer interface. # Specifically PIM Sparse-Mode will be configured on all routed underlay interfaces.'
+              required: false
+              type: INPUT_FIELD_TYPE_BOOLEAN
+              boolean_props:
+                default_value: false
+            19366254-0b83-4e5e-8bab-b6a5825f05c6:
+              id: 19366254-0b83-4e5e-8bab-b6a5825f05c6
+              name: underlayRfc5549Enabled
+              label: P2P Underlay IPv6 Unnumbered
+              description: Point to Point Underlay with RFC 5549(eBGP), i.e. IPv6 Unnumbered.
+              required: false
+              type: INPUT_FIELD_TYPE_BOOLEAN
+              boolean_props:
+                default_value: false
             underlayRouting:
               id: underlayRouting
               name: underlayRouting
@@ -3926,6 +3832,8 @@
                     - fabricLinksSubnet
                     - spineSuperSpineFabricSubnet
                     - spineSuperSpineFabricSubnetMask
+                    - 44c9edf8-6f88-454d-a305-46a891432c55
+                    - 19366254-0b83-4e5e-8bab-b6a5825f05c6
             vxlanOverlay:
               id: vxlanOverlay
               name: vxlanOverlay
@@ -3944,11 +3852,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 172.16.1.0/24
+                is_secret: false
                 static_options: null
                 format: cidr
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             vVtepAddress:
               id: vVtepAddress
               name: vVtepAddress
@@ -3958,11 +3868,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: cidr
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             overlayDetails:
               id: overlayDetails
               name: overlayDetails
@@ -3988,6 +3900,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             maximumNumberOfParallelConnections:
               id: maximumNumberOfParallelConnections
               name: maximumNumberOfParallelConnections
@@ -4000,6 +3913,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             maxSuperSpines:
               id: maxSuperSpines
               name: maxSuperSpines
@@ -4012,6 +3926,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             maximumParallelSpineUplinks:
               id: maximumParallelSpineUplinks
               name: maximumParallelSpineUplinks
@@ -4024,6 +3939,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             maximums:
               id: maximums
               name: maximums
@@ -4083,6 +3999,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             ospfArea:
               id: ospfArea
               name: area
@@ -4092,11 +4009,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: 0.0.0.0
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             ospfMaxLsa:
               id: ospfMaxLsa
               name: maxLsa
@@ -4109,6 +4028,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             ospfEnableBfd:
               id: ospfEnableBfd
               name: bfd
@@ -4127,11 +4047,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             leafOspfDefaults:
               id: leafOspfDefaults
               name: leafOspfDefaults
@@ -4151,11 +4073,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             spineOspfDefaults:
               id: spineOspfDefaults
               name: spineOspfDefaults
@@ -4226,6 +4150,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             superSpineRouterIdSubnet:
               id: superSpineRouterIdSubnet
               name: superSpineRouterIdSubnet
@@ -4235,11 +4160,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             ipv4BgpDynamicPeering:
               id: ipv4BgpDynamicPeering
               name: ipv4BgpDynamicPeering
@@ -4267,11 +4194,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             superSpineBgpDefaults:
               id: superSpineBgpDefaults
               name: superSpineBgpDefaults
@@ -4333,6 +4262,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             nonMlagReloadDelay:
               id: nonMlagReloadDelay
               name: nonMlagReloadDelay
@@ -4345,6 +4275,7 @@
                 range: null
                 static_options: null
                 dynamic_options: null
+                extra_values_allowed: false
             reloadDelays:
               id: reloadDelays
               name: reloadDelays
@@ -4366,11 +4297,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             platformSettingsEosCliStatement:
               id: platformSettingsEosCliStatement
               name: cliStatement
@@ -4380,11 +4313,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             platformSettingsEosCli:
               id: platformSettingsEosCli
               name: eosCli
@@ -4430,11 +4365,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             ipv4BgpPeerGroupPassword:
               id: ipv4BgpPeerGroupPassword
               name: password
@@ -4444,11 +4381,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             bgpIPv4PeerGroupSettings:
               id: bgpIPv4PeerGroupSettings
               name: ipv4UnderlayPeerGroup
@@ -4470,11 +4409,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             evpnBgpPeerGroupPassword:
               id: evpnBgpPeerGroupPassword
               name: password
@@ -4484,11 +4425,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             bgpEvpnPeerGroupSettings:
               id: bgpEvpnPeerGroupSettings
               name: evpnOverlayPeerGroup
@@ -4510,11 +4453,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagIPv4BgpPeerGroupPassword:
               id: mlagIPv4BgpPeerGroupPassword
               name: password
@@ -4524,11 +4469,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             bgpMlagIPv4PeerGroupSettings:
               id: bgpMlagIPv4PeerGroupSettings
               name: mlagIPv4PeerGroup
@@ -4563,11 +4510,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             routerIdInterface:
               id: routerIdInterface
               name: routerIdInterface
@@ -4577,11 +4526,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             vtepSourceInterface:
               id: vtepSourceInterface
               name: vtepSourceInterface
@@ -4591,11 +4542,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             transitPortChannelInterfaces:
               id: transitPortChannelInterfaces
               name: transitPortChannelInterfaces
@@ -4605,11 +4558,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagPeerLink:
               id: mlagPeerLink
               name: mlagPeerLink
@@ -4619,11 +4574,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             mlagPeerLinkMemberInterfaces:
               id: mlagPeerLinkMemberInterfaces
               name: mlagPeerLinkMemberInterfaces
@@ -4633,11 +4590,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             transitL2EthernetInterfaces:
               id: transitL2EthernetInterfaces
               name: transitL2EthernetInterfaces
@@ -4647,11 +4606,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             interfaceDescriptions:
               id: interfaceDescriptions
               name: interfaceDescriptions
@@ -4678,11 +4639,13 @@
               type: INPUT_FIELD_TYPE_STRING
               string_props:
                 default_value: null
+                is_secret: false
                 static_options: null
                 format: null
                 length: null
                 pattern: null
                 dynamic_options: null
+                extra_values_allowed: false
             p2pInterfaceDefaults:
               id: p2pInterfaceDefaults
               name: interfaceDefaults
@@ -4756,599 +4719,4 @@
                   values:
                     - dataCenters
         layout:
-          value: |
-            {
-              "pod":{
-                "key":"pod",
-                "type":"INPUT",
-                "order":[
-                  "SpineTagger",
-                  "leafDomains",
-                  "l2LeafDomains",
-                  "commonMlagConfig",
-                  "underlayRouting",
-                  "overlayDetails",
-                  "commonBGPConfig",
-                  "spanningTreeMode",
-                  "ospfConfiguration",
-                  "maximums"
-                ]
-              },
-              "commonMlagConfig":{
-                "key":"commonMlagConfig",
-                "type":"INPUT",
-                "order":[
-                  "internalVlan",
-                  "mlagLinkSubnet",
-                  "mlagSubnetMask",
-                  "mlagPeerL3Vlan",
-                  "mlagPeerL3Subnet",
-                  "mlagPeerL3SubnetMask",
-                  "mlagPortChannelId",
-                  "virtualRouterMac",
-                  "lacpMode"
-                ]
-              },
-              "underlayRouting":{
-                "key":"underlayRouting",
-                "type":"INPUT",
-                "order":[
-                  "underlayRoutingProtocol",
-                  "fabricLinksSubnet",
-                  "fabricSubnetMask",
-                  "spineSuperSpineFabricSubnet",
-                  "spineSuperSpineFabricSubnetMask"
-                ]
-              },
-              "leafLoopback1Subnet":{
-                "key":"leafLoopback1Subnet",
-                "type":"INPUT",
-                "dependency":{
-                  "vxlanOverlay":{
-                    "value":[
-                      false
-                    ],
-                    "mode":"HIDE"
-                  }
-                }
-              },
-              "vVtepAddress":{
-                "key":"vVtepAddress",
-                "type":"INPUT",
-                "dependency":{
-                  "vxlanOverlay":{
-                    "value":[
-                      false
-                    ],
-                    "mode":"HIDE"
-                  }
-                }
-              },
-              "superSpinePlanes":{
-                "key":"superSpinePlanes",
-                "isPageLayout":true,
-                "showDefaultRow":false,
-                "order":[
-                  "superSpinePlane"
-                ],
-                "type":"INPUT",
-                "fieldOverrides":{
-                  "description":"Super-Spine-Plane value should be an integer."
-                }
-              },
-              "superSpinePlane":{
-                "key":"superSpinePlane",
-                "type":"INPUT",
-                "order":[
-                  "SuperSpineTagger",
-                  "bgpConfiguration"
-                ]
-              },
-              "pods":{
-                "key":"pods",
-                "type":"INPUT"
-              },
-              "SpineTagger":{
-                "type":"TAGGER",
-                "parentKey":"pod",
-                "key":"SpineTagger",
-                "name":"Spines",
-                "assignmentType":"SINGLE",
-                "prepopulate":true,
-                "tagFilterQuery":"Role:Spine ",
-                "tagType":"DEVICE",
-                "description":"The spines in this Pod. Each spine in this Pod should have a unique NodeId value starting from 1.",
-                "columns":[
-                  {
-                    "tagLabel":"NodeId",
-                    "suggestedValues":[
-                    ]
-                  }
-                ]
-              },
-              "LeafTagger":{
-                "type":"TAGGER",
-                "parentKey":"leafDomain",
-                "key":"LeafTagger",
-                "name":"L3 Leafs",
-                "assignmentType":"SINGLE",
-                "prepopulate":true,
-                "tagFilterQuery":"Role:Leaf ",
-                "tagType":"DEVICE",
-                "description":"The L3 leafs in this Leaf-Domain. Each L3 leaf in this Pod should have a unique NodeId value starting from 1.",
-                "columns":[
-                  {
-                    "tagLabel":"NodeId",
-                    "suggestedValues":[
-                    ]
-                  }
-                ]
-              },
-              "leafDomains":{
-                "key":"leafDomains",
-                "isPageLayout":true,
-                "showDefaultRow":false,
-                "type":"INPUT",
-                "fieldOverrides":{
-                  "description":"Leaf-Domain value should be an integer."
-                }
-              },
-              "SuperSpineTagger":{
-                "type":"TAGGER",
-                "parentKey":"superSpinePlane",
-                "key":"SuperSpineTagger",
-                "name":"Super-Spines",
-                "assignmentType":"SINGLE",
-                "prepopulate":true,
-                "tagFilterQuery":"Role:Super-Spine ",
-                "tagType":"DEVICE",
-                "description":"The Super-Spines in this super-spine plane.",
-                "columns":[
-                  {
-                    "tagLabel":"NodeId",
-                    "suggestedValues":[
-                    ]
-                  }
-                ]
-              },
-              "L2LeafTagger":{
-                "type":"TAGGER",
-                "parentKey":"l2LeafDomain",
-                "key":"L2LeafTagger",
-                "name":"L2 Leafs",
-                "assignmentType":"SINGLE",
-                "prepopulate":true,
-                "tagFilterQuery":"Role:L2-Leaf ",
-                "tagType":"DEVICE",
-                "description":"The L2 leafs in this L2 Leaf-Domain. Each L2 leaf in this Pod should have a unique NodeId value starting from 1.",
-                "columns":[
-                  {
-                    "tagLabel":"NodeId",
-                    "suggestedValues":[
-                    ]
-                  }
-                ]
-              },
-              "l2LeafDomains":{
-                "key":"l2LeafDomains",
-                "isPageLayout":true,
-                "showDefaultRow":false,
-                "order":[
-                  "l2LeafDomain"
-                ],
-                "type":"INPUT",
-                "fieldOverrides":{
-                  "description":"L2-Leaf-Domain value should be an integer."
-                }
-              },
-              "l2LeafDomain":{
-                "key":"l2LeafDomain",
-                "type":"INPUT",
-                "order":[
-                  "L2LeafTagger",
-                  "l2LeafMlag"
-                ]
-              },
-              "l2LeafMlag":{
-                "key":"l2LeafMlag",
-                "type":"INPUT",
-                "valueToLabelMap":{
-                  "True":"On",
-                  "False":"Off"
-                }
-              },
-              "l3LeafMlag":{
-                "key":"l3LeafMlag",
-                "type":"INPUT",
-                "valueToLabelMap":{
-                  "True":"On",
-                  "False":"Off"
-                }
-              },
-              "leafDomain":{
-                "key":"leafDomain",
-                "type":"INPUT",
-                "order":[
-                  "LeafTagger",
-                  "asNumber",
-                  "l3LeafMlag"
-                ]
-              },
-              "ospfEnableBfd":{
-                "key":"ospfEnableBfd",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "OSPF"
-                    ],
-                    "mode":"SHOW"
-                  }
-                },
-                "type":"INPUT"
-              },
-              "ospfMaxLsa":{
-                "key":"ospfMaxLsa",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "OSPF"
-                    ],
-                    "mode":"SHOW"
-                  }
-                },
-                "type":"INPUT"
-              },
-              "ospfArea":{
-                "key":"ospfArea",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "OSPF"
-                    ],
-                    "mode":"SHOW"
-                  }
-                },
-                "type":"INPUT"
-              },
-              "ospfProcessId":{
-                "key":"ospfProcessId",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "OSPF"
-                    ],
-                    "mode":"SHOW"
-                  }
-                },
-                "type":"INPUT"
-              },
-              "ospfEosCliStatement":{
-                "key":"ospfEosCliStatement",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "ospf"
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "RoleTagger":{
-                "type":"TAGGER",
-                "parentKey":"dataCenter",
-                "key":"RoleTagger",
-                "name":"Role",
-                "assignmentType":"MULTIPLE",
-                "prepopulate":true,
-                "tagType":"DEVICE",
-                "description":"Define a switch's role and node ID. Valid Role values are 'Leaf', 'Spine', 'Super-Spine', and 'L2-Leaf'. NodeId values should be integers.",
-                "columns":[
-                  {
-                    "tagLabel":"Role",
-                    "suggestedValues":[
-                      "L2-Leaf",
-                      "Spine",
-                      "Leaf",
-                      "Super-Spine"
-                    ]
-                  },
-                  {
-                    "tagLabel":"NodeId",
-                    "suggestedValues":[
-                    ]
-                  }
-                ]
-              },
-              "dataCenter":{
-                "key":"dataCenter",
-                "type":"INPUT",
-                "order":[
-                  "pods",
-                  "superSpinePlanes",
-                  "RoleTagger",
-                  "platformSettingsResolver",
-                  "advancedFabricSettings"
-                ]
-              },
-              "spineAS":{
-                "key":"spineAS",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                },
-                "type":"INPUT"
-              },
-              "ospfConfiguration":{
-                "key":"ospfConfiguration",
-                "type":"INPUT",
-                "order":[
-                  "ospfProcessId",
-                  "ospfArea",
-                  "ospfMaxLsa",
-                  "ospfEnableBfd",
-                  "spineOspfDefaults",
-                  "leafOspfDefaults"
-                ]
-              },
-              "spineOspfEosCliStatement":{
-                "key":"spineOspfEosCliStatement",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "OSPF"
-                    ],
-                    "mode":"SHOW"
-                  }
-                },
-                "type":"INPUT"
-              },
-              "leafOspfEosCliStatement":{
-                "key":"leafOspfEosCliStatement",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "ospf"
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "ipv4BgpPeerGroupName":{
-                "key":"ipv4BgpPeerGroupName",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "ipv4BgpPeerGroupPassword":{
-                "key":"ipv4BgpPeerGroupPassword",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "evpnBgpPeerGroupName":{
-                "key":"evpnBgpPeerGroupName",
-                "type":"INPUT",
-                "dependency":{
-                  "evpnEnabled":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "evpnBgpPeerGroupPassword":{
-                "key":"evpnBgpPeerGroupPassword",
-                "type":"INPUT",
-                "dependency":{
-                  "evpnEnabled":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "mlagIPv4BgpPeerGroupName":{
-                "key":"mlagIPv4BgpPeerGroupName",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "mlagIPv4BgpPeerGroupPassword":{
-                "key":"mlagIPv4BgpPeerGroupPassword",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "interfaceDescriptions":{
-                "key":"interfaceDescriptions",
-                "type":"INPUT",
-                "order":[
-                  "routerIdInterface",
-                  "vtepSourceInterface",
-                  "transitL3EthernetInterfaces",
-                  "transitL2EthernetInterfaces",
-                  "transitPortChannelInterfaces",
-                  "mlagPeerLink",
-                  "mlagPeerLinkMemberInterfaces"
-                ]
-              },
-              "bgpIPv4PeerGroupSettings":{
-                "key":"bgpIPv4PeerGroupSettings",
-                "type":"INPUT",
-                "order":[
-                  "ipv4BgpPeerGroupName",
-                  "ipv4BgpPeerGroupPassword"
-                ]
-              },
-              "leafASbase":{
-                "key":"leafASbase",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "spineLoopback0Subnet":{
-                "key":"spineLoopback0Subnet",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "leafLoopback0Subnet":{
-                "key":"leafLoopback0Subnet",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "spineBGPDynamicNeighbors":{
-                "key":"spineBGPDynamicNeighbors",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "evpnEnabled":{
-                "key":"evpnEnabled",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "spineEosCliBgpStatement":{
-                "key":"spineEosCliBgpStatement",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "leafBgpEosCliStatement":{
-                "key":"leafBgpEosCliStatement",
-                "type":"INPUT",
-                "dependency":{
-                  "underlayRoutingProtocol":{
-                    "value":[
-                      "BGP"
-                    ],
-                    "mode":"SHOW"
-                  },
-                  "vxlanOverlay":{
-                    "value":[
-                      true
-                    ],
-                    "mode":"SHOW"
-                  }
-                }
-              },
-              "p2pInterfaceSettings":{
-                "key":"p2pInterfaceSettings",
-                "type":"INPUT",
-                "order":[
-                  "p2pInterfaceDefaults"
-                ]
-              }
-            }
+          value: '{"pod":{"key":"pod","type":"INPUT","order":["SpineTagger","leafDomains","l2LeafDomains","underlayRouting","overlayDetails","commonBGPConfig","ospfConfiguration","spanningTreeMode","commonMlagConfig","maximums"]},"commonMlagConfig":{"key":"commonMlagConfig","type":"INPUT","order":["internalVlan","mlagLinkSubnet","mlagSubnetMask","mlagPeerL3Vlan","d65f3c69-5601-41fc-a659-4dc569710544","mlagPeerL3Subnet","mlagPeerL3SubnetMask","mlagPortChannelId","virtualRouterMac","lacpMode"]},"underlayRouting":{"key":"underlayRouting","type":"INPUT","order":["underlayRoutingProtocol","19366254-0b83-4e5e-8bab-b6a5825f05c6","44c9edf8-6f88-454d-a305-46a891432c55","fabricLinksSubnet","fabricSubnetMask","spineSuperSpineFabricSubnet","spineSuperSpineFabricSubnetMask"]},"leafLoopback1Subnet":{"key":"leafLoopback1Subnet","type":"INPUT","dependency":{"vxlanOverlay":{"value":[false],"mode":"HIDE"}}},"vVtepAddress":{"key":"vVtepAddress","type":"INPUT","dependency":{"vxlanOverlay":{"value":[false],"mode":"HIDE"}}},"superSpinePlanes":{"key":"superSpinePlanes","isPageLayout":true,"showDefaultRow":false,"order":["superSpinePlane"],"type":"INPUT","fieldOverrides":{"description":"Super-Spine-Plane value should be an integer."}},"superSpinePlane":{"key":"superSpinePlane","type":"INPUT","order":["SuperSpineTagger","bgpConfiguration"]},"pods":{"key":"pods","type":"INPUT"},"SpineTagger":{"type":"TAGGER","parentKey":"pod","key":"SpineTagger","name":"Spines","assignmentType":"SINGLE","prepopulate":true,"tagFilterQuery":"Role:Spine ","tagType":"DEVICE","description":"The spines in this Pod. Each spine in this Pod should have a unique NodeId value starting from 1.","columns":[{"tagLabel":"NodeId","suggestedValues":[]}]},"LeafTagger":{"type":"TAGGER","parentKey":"leafDomain","key":"LeafTagger","name":"L3 Leafs","assignmentType":"SINGLE","prepopulate":true,"tagFilterQuery":"Role:Leaf ","tagType":"DEVICE","description":"The L3 leafs in this Leaf-Domain. Each L3 leaf in this Pod should have a unique NodeId value starting from 1.","columns":[{"tagLabel":"NodeId","suggestedValues":[]}]},"leafDomains":{"key":"leafDomains","isPageLayout":true,"showDefaultRow":false,"type":"INPUT","fieldOverrides":{"description":"Leaf-Domain value should be an integer."}},"SuperSpineTagger":{"type":"TAGGER","parentKey":"superSpinePlane","key":"SuperSpineTagger","name":"Super-Spines","assignmentType":"SINGLE","prepopulate":true,"tagFilterQuery":"Role:Super-Spine ","tagType":"DEVICE","description":"The Super-Spines in this super-spine plane.","columns":[{"tagLabel":"NodeId","suggestedValues":[]}]},"L2LeafTagger":{"type":"TAGGER","parentKey":"l2LeafDomain","key":"L2LeafTagger","name":"L2 Leafs","assignmentType":"SINGLE","prepopulate":true,"tagFilterQuery":"Role:L2-Leaf ","tagType":"DEVICE","description":"The L2 leafs in this L2 Leaf-Domain. Each L2 leaf in this Pod should have a unique NodeId value starting from 1.","columns":[{"tagLabel":"NodeId","suggestedValues":[]}]},"l2LeafDomains":{"key":"l2LeafDomains","isPageLayout":true,"showDefaultRow":false,"order":["l2LeafDomain"],"type":"INPUT","fieldOverrides":{"description":"L2-Leaf-Domain value should be an integer."}},"l2LeafDomain":{"key":"l2LeafDomain","type":"INPUT","order":["L2LeafTagger","l2LeafMlag"]},"l2LeafMlag":{"key":"l2LeafMlag","type":"INPUT","valueToLabelMap":{"True":"On","False":"Off"}},"l3LeafMlag":{"key":"l3LeafMlag","type":"INPUT","valueToLabelMap":{"True":"On","False":"Off"}},"leafDomain":{"key":"leafDomain","type":"INPUT","order":["LeafTagger","asNumber","l3LeafMlag"]},"ospfEnableBfd":{"key":"ospfEnableBfd","dependency":{"underlayRoutingProtocol":{"value":["OSPF"],"mode":"SHOW"}},"type":"INPUT"},"ospfMaxLsa":{"key":"ospfMaxLsa","dependency":{"underlayRoutingProtocol":{"value":["OSPF"],"mode":"SHOW"}},"type":"INPUT"},"ospfArea":{"key":"ospfArea","dependency":{"underlayRoutingProtocol":{"value":["OSPF"],"mode":"SHOW"}},"type":"INPUT"},"ospfProcessId":{"key":"ospfProcessId","dependency":{"underlayRoutingProtocol":{"value":["OSPF"],"mode":"SHOW"}},"type":"INPUT"},"ospfEosCliStatement":{"key":"ospfEosCliStatement","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["ospf"],"mode":"SHOW"}}},"RoleTagger":{"type":"TAGGER","parentKey":"dataCenter","key":"RoleTagger","name":"Role","assignmentType":"MULTIPLE","prepopulate":true,"tagType":"DEVICE","description":"Define a switch''s role and node ID. Valid Role values are ''Leaf'', ''Spine'', ''Super-Spine'', and ''L2-Leaf''. NodeId values should be integers.","columns":[{"tagLabel":"Role","suggestedValues":["L2-Leaf","Spine","Leaf","Super-Spine"]},{"tagLabel":"NodeId","suggestedValues":[]}]},"dataCenter":{"key":"dataCenter","type":"INPUT","order":["pods","superSpinePlanes","RoleTagger","platformSettingsResolver","advancedFabricSettings"]},"spineAS":{"key":"spineAS","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"vxlanOverlay":{"value":[true],"mode":"SHOW"}},"type":"INPUT"},"ospfConfiguration":{"key":"ospfConfiguration","type":"INPUT","order":["ospfProcessId","ospfArea","ospfMaxLsa","ospfEnableBfd","spineOspfDefaults","leafOspfDefaults"]},"spineOspfEosCliStatement":{"key":"spineOspfEosCliStatement","dependency":{"underlayRoutingProtocol":{"value":["OSPF"],"mode":"SHOW"}},"type":"INPUT"},"leafOspfEosCliStatement":{"key":"leafOspfEosCliStatement","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["ospf"],"mode":"SHOW"}}},"ipv4BgpPeerGroupName":{"key":"ipv4BgpPeerGroupName","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"}}},"ipv4BgpPeerGroupPassword":{"key":"ipv4BgpPeerGroupPassword","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"}}},"evpnBgpPeerGroupName":{"key":"evpnBgpPeerGroupName","type":"INPUT","dependency":{"evpnEnabled":{"value":[true],"mode":"SHOW"}}},"evpnBgpPeerGroupPassword":{"key":"evpnBgpPeerGroupPassword","type":"INPUT","dependency":{"evpnEnabled":{"value":[true],"mode":"SHOW"}}},"mlagIPv4BgpPeerGroupName":{"key":"mlagIPv4BgpPeerGroupName","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"}}},"mlagIPv4BgpPeerGroupPassword":{"key":"mlagIPv4BgpPeerGroupPassword","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"}}},"interfaceDescriptions":{"key":"interfaceDescriptions","type":"INPUT","order":["routerIdInterface","vtepSourceInterface","transitL3EthernetInterfaces","transitL2EthernetInterfaces","transitPortChannelInterfaces","mlagPeerLink","mlagPeerLinkMemberInterfaces"]},"bgpIPv4PeerGroupSettings":{"key":"bgpIPv4PeerGroupSettings","type":"INPUT","order":["ipv4BgpPeerGroupName","ipv4BgpPeerGroupPassword"]},"leafASbase":{"key":"leafASbase","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"vxlanOverlay":{"value":[true],"mode":"SHOW"}}},"spineLoopback0Subnet":{"key":"spineLoopback0Subnet","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"vxlanOverlay":{"value":[true],"mode":"SHOW"}}},"leafLoopback0Subnet":{"key":"leafLoopback0Subnet","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"vxlanOverlay":{"value":[true],"mode":"SHOW"}}},"spineBGPDynamicNeighbors":{"key":"spineBGPDynamicNeighbors","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[false],"mode":"SHOW"}},"type":"INPUT","dependencyType":"AND"},"evpnEnabled":{"key":"evpnEnabled","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"vxlanOverlay":{"value":[true],"mode":"SHOW"}}},"spineEosCliBgpStatement":{"key":"spineEosCliBgpStatement","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"vxlanOverlay":{"value":[true],"mode":"SHOW"}}},"leafBgpEosCliStatement":{"key":"leafBgpEosCliStatement","type":"INPUT","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"},"vxlanOverlay":{"value":[true],"mode":"SHOW"}}},"p2pInterfaceSettings":{"key":"p2pInterfaceSettings","type":"INPUT","order":["p2pInterfaceDefaults"]},"8ca19626-919c-4403-99dc-e2bc21d2bb58":{"key":"8ca19626-919c-4403-99dc-e2bc21d2bb58","dependency":{"vxlanOverlay":{"value":[true],"mode":"SHOW"},"evpnEnabled":{"value":[true],"mode":"SHOW"}},"dependencyType":"AND","type":"INPUT"},"commonBGPConfig":{"key":"commonBGPConfig","type":"INPUT","order":["spineAS","leafASbase","spineLoopback0Subnet","leafLoopback0Subnet","spineBGPDynamicNeighbors","evpnEnabled","8ca19626-919c-4403-99dc-e2bc21d2bb58","466fa395-f633-4ef5-a7b4-bdefa5864bfa","spineBgpDefaults","leafBgpDefaults"]},"466fa395-f633-4ef5-a7b4-bdefa5864bfa":{"key":"466fa395-f633-4ef5-a7b4-bdefa5864bfa","dependency":{"vxlanOverlay":{"value":[true],"mode":"SHOW"},"evpnEnabled":{"value":[true],"mode":"SHOW"},"44c9edf8-6f88-454d-a305-46a891432c55":{"value":[true],"mode":"SHOW"}},"dependencyType":"AND","type":"INPUT"},"e115dd71-a73c-4402-a8aa-b6a4ebb95e8b":{"key":"e115dd71-a73c-4402-a8aa-b6a4ebb95e8b","dependency":{"44c9edf8-6f88-454d-a305-46a891432c55":{"value":[true],"mode":"SHOW"}},"type":"INPUT","dependencyType":"AND"},"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"key":"19366254-0b83-4e5e-8bab-b6a5825f05c6","type":"INPUT","dependencyType":"AND","dependency":{"underlayRoutingProtocol":{"value":["BGP"],"mode":"SHOW"}}},"mlagSubnetMask":{"key":"mlagSubnetMask","type":"INPUT"},"mlagLinkSubnet":{"key":"mlagLinkSubnet","type":"INPUT"},"mlagPeerL3Subnet":{"key":"mlagPeerL3Subnet","dependency":{"d65f3c69-5601-41fc-a659-4dc569710544":{"value":[false],"mode":"SHOW"}},"type":"INPUT","dependencyType":"AND"},"mlagPeerL3SubnetMask":{"key":"mlagPeerL3SubnetMask","type":"INPUT","dependencyType":"AND","dependency":{"d65f3c69-5601-41fc-a659-4dc569710544":{"value":[false],"mode":"SHOW"}}},"fabricLinksSubnet":{"key":"fabricLinksSubnet","type":"INPUT","dependencyType":"AND","dependency":{"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[false],"mode":"SHOW"}}},"fabricSubnetMask":{"key":"fabricSubnetMask","type":"INPUT","dependencyType":"AND","dependency":{"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[false],"mode":"SHOW"}}},"spineSuperSpineFabricSubnet":{"key":"spineSuperSpineFabricSubnet","type":"INPUT","dependency":{"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[false],"mode":"SHOW"}}},"spineSuperSpineFabricSubnetMask":{"key":"spineSuperSpineFabricSubnetMask","type":"INPUT","dependencyType":"AND","dependency":{"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[false],"mode":"SHOW"}}},"2ce9df91-e46a-4aae-b9d6-b95b33b4c3b0":{"key":"2ce9df91-e46a-4aae-b9d6-b95b33b4c3b0","type":"INPUT","dependency":{"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[true],"mode":"SHOW"}}},"c9d43f13-26a9-4858-89ce-91581288de83":{"key":"c9d43f13-26a9-4858-89ce-91581288de83","type":"INPUT","dependency":{"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[true],"mode":"SHOW"}}},"d65f3c69-5601-41fc-a659-4dc569710544":{"key":"d65f3c69-5601-41fc-a659-4dc569710544","type":"INPUT","dependencyType":"AND","dependency":{"19366254-0b83-4e5e-8bab-b6a5825f05c6":{"value":[true],"mode":"SHOW"}}}}'
